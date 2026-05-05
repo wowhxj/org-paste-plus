@@ -1,0 +1,98 @@
+#+TITLE: org-image-paste
+#+OPTIONS: toc:nil num:nil
+
+在 Emacs Org 模式中从剪贴板粘贴图片，并就地调整显示尺寸。
+
+* 功能
+
+- 一键把剪贴板里的截图保存到 =<文件名>.assets/= 目录，并自动插入
+  =#+DOWNLOADED= / =#+CAPTION= / =#+ATTR_ORG= / =#+ATTR_LATEX= / =#+ATTR_HTML=
+  以及 =file:= 链接。
+- 跨平台剪贴板支持：macOS（=pngpaste=）、Linux（=xclip=）、Windows（PowerShell）。
+- 在 =#+ATTR_*= 行上按 ~+~ / ~-~ 增减所有 =:width N= 值，并刷新当前 subtree 内联图片。
+- 在内联图片上按 ~+~ / ~-~ 直接调用 =image-increase-size= / =image-decrease-size=。
+- 既不在属性行也不在图片上时，按键退化为字符自插入；~C-+~ / ~C--~ 退化为
+  =text-scale-increase= / =text-scale-decrease=。
+- 在链接上按 ~C-c b~ 删除链接所指向的本地文件，并清理周围的 =#+ATTR_*= 行（仅 PNG）。
+
+* 依赖
+
+| 平台    | 工具                                         | 安装                       |
+|---------+----------------------------------------------+----------------------------|
+| macOS   | =pngpaste=                                   | =brew install pngpaste=    |
+| Linux   | =xclip=                                      | =apt install xclip= 等价命令 |
+| Windows | PowerShell（系统自带）                       | -                          |
+
+也可以通过 =org-image-paste-clipboard-command= 自行覆盖命令模板。
+
+* 安装
+
+** use-package（推荐）
+
+#+begin_src emacs-lisp
+(use-package org-image-paste
+  :load-path "~/path/to/org-image-paste"
+  :hook (org-mode . org-image-paste-mode))
+#+end_src
+
+** 手动
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "~/path/to/org-image-paste")
+(require 'org-image-paste)
+(add-hook 'org-mode-hook #'org-image-paste-mode)
+#+end_src
+
+* 默认快捷键
+
+所有按键都定义在 =org-image-paste-mode-map= 中，可自由 rebind。
+
+| 按键    | 命令                                            | 行为                             |
+|---------+-------------------------------------------------+----------------------------------|
+| ~s-V~   | =org-image-paste-from-clipboard=                | 从剪贴板粘贴图片                 |
+| ~C-c b~ | =org-image-paste-delete-link-and-file=          | 删除链接和本地文件               |
+| ~C-+~   | =org-image-paste-increase=                      | 放大图片 / 属性宽度 / 文本缩放   |
+| ~C--~   | =org-image-paste-decrease=                      | 缩小图片 / 属性宽度 / 文本缩放   |
+| ~+~     | =org-image-paste-image-increase-or-self-insert= | 图片上放大，否则插入 =+=         |
+| ~-~     | =org-image-paste-image-decrease-or-self-insert= | 图片上缩小，否则插入 =-=         |
+
+* 工作流示例
+
+1. 截图后，光标置于 Org 文件中合适位置。
+2. 按 ~s-V~，输入宽度（默认 800px）。
+3. 插入的内容大致如下：
+
+   #+begin_example
+   ,#+DOWNLOADED: screenshot @ 2026-05-05 Tue 19:30:00
+   ,#+CAPTION:
+   ,#+ATTR_ORG: :width 800
+   ,#+ATTR_LATEX: :width 1.0\linewidth :float nil
+   ,#+ATTR_HTML: :width 800 :class zoomImage :border 1
+   [[file:my-notes.assets/img_20260505_193000.png]]
+   #+end_example
+
+4. 想调整尺寸时，把光标停在任一 =#+ATTR_*= 行，按 ~+~ / ~-~ 即可，
+   每按一次步进 =org-image-paste-resize-step=（默认 50px），三个 ATTR
+   行的 =:width= 会一起更新，subtree 内联图片立即刷新。
+
+5. 不需要某张图片时，把光标移到 =[[file:...]]= 链接上，按 ~C-c b~
+   会确认后删除文件，并清掉相关的 =#+ATTR_*= 行。
+
+* 自定义项
+
+通过 =M-x customize-group RET org-image-paste RET= 查看全部，常用的有：
+
+| 变量                                  | 默认值                  | 说明                                      |
+|---------------------------------------+-------------------------+-------------------------------------------|
+| =org-image-paste-default-width=       | =800=                   | 粘贴时的默认宽度（px）                    |
+| =org-image-paste-resize-step=         | =50=                    | =:width= 调整步长（px）                   |
+| =org-image-paste-latex-reference-width= | =800.0=               | 计算 LaTeX =\linewidth= 比例的参考宽度    |
+| =org-image-paste-folder-format=       | ="%s.assets/"=          | 资源目录命名模板                          |
+| =org-image-paste-file-name-format=    | ="img_%s.png"=          | 文件名模板                                |
+| =org-image-paste-time-format=         | ="%Y%m%d_%H%M%S"=       | 时间戳格式                                |
+| =org-image-paste-html-class=          | ="zoomImage"=           | HTML class                                |
+| =org-image-paste-clipboard-command=   | =nil=（按平台自动选择） | 自定义剪贴板命令模板，=%s= 为目标文件路径 |
+
+* 致谢
+
+调整图片尺寸的思路来自 [[https://emacs-china.org/t/org-mode/26605][emacs-china 社区讨论]]。
