@@ -243,29 +243,43 @@ lines."
 (defun org-image-paste--resize-attr (sign)
   "Adjust `:width N' values on the surrounding ATTR block by SIGN.
 SIGN is `+' to grow or `-' to shrink.  Walks back up to three lines
-to cover the typical ATTR_ORG / ATTR_LATEX / ATTR_HTML triple."
+to cover the typical ATTR_ORG / ATTR_LATEX / ATTR_HTML triple.
+ATTR_ORG and ATTR_HTML pixel widths are adjusted directly; the
+ATTR_LATEX \\\\linewidth fraction is recomputed from the new pixel width."
   (save-excursion
-    (let ((start (line-beginning-position -3))
-          (end   (line-end-position)))
-      (goto-char start)
-      (while (re-search-forward ":width \\([0-9]+\\)" end t)
+    (let* ((reg-start (line-beginning-position -3))
+           (reg-end   (copy-marker (line-end-position) t))
+           new-pixel-width)
+      ;; Pass 1: update integer :width on ORG and HTML lines only.
+      ;; ATTR_LATEX uses a fractional \linewidth value, handled separately.
+      (goto-char reg-start)
+      (while (re-search-forward
+              "^[ \t]*#\\+ATTR_\\(?:ORG\\|HTML\\):.*:width \\([0-9]+\\)" reg-end t)
         (let* ((width (string-to-number (match-string 1)))
                (new   (if (eq sign '+)
                           (+ width org-image-paste-resize-step)
                         (- width org-image-paste-resize-step))))
           (when (> new 0)
-            (replace-match (number-to-string new) t t nil 1))))))
+            (setq new-pixel-width new)
+            (replace-match (number-to-string new) t t nil 1))))
+      ;; Pass 2: recompute ATTR_LATEX \linewidth fraction from the new pixel width.
+      (when new-pixel-width
+        (goto-char reg-start)
+        (when (re-search-forward
+               "^[ \t]*#\\+ATTR_LATEX:.*:width \\([0-9.]+\\)\\\\linewidth" reg-end t)
+          (replace-match
+           (org-image-paste--latex-width new-pixel-width) t t nil 1)))
+      (set-marker reg-end nil)))
   (org-image-paste-display-subtree-images 'on))
 
 (defun org-image-paste--resize (resize-func)
   "Resize images or adjust text scale based on context.
-RESIZE-FUNC is called when point is on an inline image."
+When on an ATTR/CAPTION line or inline image, updates the surrounding
+`:width' block.  Otherwise adjusts text scale."
   (let ((sign (if (eq resize-func 'image-increase-size) '+ '-)))
     (cond
-     ((org-image-paste--at-attr-line-p)
+     ((or (org-image-paste--at-attr-line-p) (image-at-point-p))
       (org-image-paste--resize-attr sign))
-     ((image-at-point-p)
-      (funcall resize-func))
      (t
       (call-interactively
        (if (eq sign '+) #'text-scale-increase #'text-scale-decrease))))))
