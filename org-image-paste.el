@@ -211,32 +211,54 @@ width used for the ATTR_ORG / ATTR_HTML lines."
 ;;;; Deletion
 
 ;;;###autoload
-(defun org-image-paste-delete-link-and-file ()
-  "Delete the file referenced by the link at point, and the link itself.
+(defun org-image-paste--link-block-bounds ()
+  "Return (START . END) for the image block containing the link at point.
+Scans upward from the current line to collect contiguous
+`#+DOWNLOADED:', `#+CAPTION:', and `#+ATTR_*' lines, then includes
+the link line itself.  Returns nil if point is not on a bracket link."
+  (save-excursion
+    (unless (org-in-regexp org-link-bracket-re 1)
+      (cl-return-from org-image-paste--link-block-bounds nil))
+    (beginning-of-line)
+    (let ((end (line-end-position))
+          (start (line-beginning-position)))
+      ;; Walk upward as long as each preceding line is a keyword we own.
+      (while (and (> (line-beginning-position) (point-min))
+                  (progn
+                    (forward-line -1)
+                    (looking-at
+                     "^[ \t]*#\\+\\(?:DOWNLOADED\\|CAPTION\\|ATTR_[A-Z]+\\):")))
+        (setq start (line-beginning-position)))
+      (cons start (1+ end))))) ; +1 to include the trailing newline
 
-For PNG files inserted with `org-image-paste-from-clipboard', also
-removes the surrounding `#+DOWNLOADED', `#+CAPTION' and `#+ATTR_*'
-lines."
+(defun org-image-paste-delete-link-and-file ()
+  "Delete the file referenced by the link at point and the surrounding block.
+
+Removes the `[[file:...]]' link line together with any contiguous
+preceding `#+DOWNLOADED:', `#+CAPTION:', and `#+ATTR_*' lines."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Not in an Org buffer"))
-  (org-with-point-at (point)
-    (unless (org-in-regexp org-link-bracket-re 1)
-      (user-error "Point is not on an Org link"))
-    (let* ((link (org-element-context))
-           (path (org-element-property :path link))
-           (type (org-element-property :type link)))
-      (unless (and (string= type "file") path (file-exists-p path))
-        (user-error "Link does not point to an existing local file"))
-      (when (yes-or-no-p (format "Delete local file %s? " path))
-        (delete-file path)
-        (when (org-in-regexp org-link-any-re)
-          (replace-match "" t t))
-        (when (string= (downcase (or (file-name-extension path) "")) "png")
-          (save-excursion
-            (let ((start (progn (forward-line -5) (line-beginning-position)))
-                  (end   (progn (forward-line 4) (line-end-position))))
-              (delete-region start end))))))))
+  (unless (org-in-regexp org-link-bracket-re 1)
+    (user-error "Point is not on an Org link"))
+  (let* ((link (org-element-context))
+         (path (org-element-property :path link))
+         (type (org-element-property :type link)))
+    (unless (string= type "file")
+      (user-error "Link is not a file link"))
+    (unless path
+      (user-error "Could not determine file path from link"))
+    (when (yes-or-no-p (format "Delete %s%s? "
+                               path
+                               (if (file-exists-p path) "" " (file missing)")))
+      (when (file-exists-p path)
+        (delete-file path))
+      (let ((bounds (org-image-paste--link-block-bounds)))
+        (if bounds
+            (delete-region (car bounds) (min (cdr bounds) (point-max)))
+          ;; Fallback: just delete the link text on this line.
+          (when (org-in-regexp org-link-any-re)
+            (replace-match "" t t)))))))
 
 ;;;; Resizing
 
