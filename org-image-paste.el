@@ -213,23 +213,45 @@ width used for the ATTR_ORG / ATTR_HTML lines."
 ;;;###autoload
 (defun org-image-paste--link-block-bounds ()
   "Return (START . END) for the image block containing the link at point.
-Scans upward from the current line to collect contiguous
-`#+DOWNLOADED:', `#+CAPTION:', and `#+ATTR_*' lines, then includes
-the link line itself.  Returns nil if point is not on a bracket link."
+Scans upward from the link line to collect contiguous #+DOWNLOADED:,
+#+CAPTION:, and #+ATTR_* lines.  If the resulting block is wrapped
+inside a #+begin_results … #+end_results / #+RESULTS: envelope,
+expands the bounds to include that envelope too.
+Returns nil if point is not on a bracket link."
   (save-excursion
     (unless (org-in-regexp org-link-bracket-re 1)
       (cl-return-from org-image-paste--link-block-bounds nil))
     (beginning-of-line)
-    (let ((end (line-end-position))
-          (start (line-beginning-position)))
-      ;; Walk upward as long as each preceding line is a keyword we own.
+    (let ((link-end (line-end-position))
+          (start    (line-beginning-position)))
+      ;; Walk upward collecting DOWNLOADED / CAPTION / ATTR_* lines.
       (while (and (> (line-beginning-position) (point-min))
                   (progn
                     (forward-line -1)
                     (looking-at
                      "^[ \t]*#\\+\\(?:DOWNLOADED\\|CAPTION\\|ATTR_[A-Z]+\\):")))
         (setq start (line-beginning-position)))
-      (cons start (1+ end))))) ; +1 to include the trailing newline
+      ;; Check whether the line just above `start' is #+begin_results.
+      (let ((end (1+ link-end)))      ; +1 eats the trailing newline
+        (save-excursion
+          (goto-char start)
+          (when (and (> (line-beginning-position) (point-min))
+                     (progn (forward-line -1)
+                            (looking-at "^[ \t]*#\\+begin_results")))
+            (setq start (line-beginning-position))
+            ;; Also pull in #+RESULTS: if it sits directly above.
+            (when (and (> (line-beginning-position) (point-min))
+                       (progn (forward-line -1)
+                              (looking-at "^[ \t]*#\\+RESULTS:")))
+              (setq start (line-beginning-position)))))
+        ;; Check whether the line just after the link is #+end_results.
+        (save-excursion
+          (goto-char link-end)
+          (when (and (< (point) (point-max))
+                     (progn (forward-line 1)
+                            (looking-at "^[ \t]*#\\+end_results")))
+            (setq end (min (1+ (line-end-position)) (point-max)))))
+        (cons start end)))))
 
 (defun org-image-paste-delete-link-and-file ()
   "Delete the file referenced by the link at point and the surrounding block.
