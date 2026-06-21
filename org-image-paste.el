@@ -142,6 +142,17 @@ based on `system-type'."
     (beginning-of-line)
     (looking-at-p "^[ \t]*#\\+\\(?:ATTR_[A-Z]+\\|CAPTION\\):")))
 
+(defun org-image-paste--at-image-link-p ()
+  "Non-nil if point is on an Org link pointing to an image file.
+Unlike `image-at-point-p', this works even when an `appear'-style
+feature has deleted the inline image overlay (which removes the image
+`display' property the cursor would otherwise sit on)."
+  (let ((ctx (org-element-context)))
+    (and (eq (org-element-type ctx) 'link)
+         (member (org-element-property :type ctx) '("file" "attachment"))
+         (let ((path (org-element-property :path ctx)))
+           (and path (image-supported-file-p path))))))
+
 ;;;; Display refresh
 
 (defun org-image-paste-display-subtree-images (&optional mode)
@@ -322,7 +333,9 @@ When on an ATTR/CAPTION line or inline image, updates the surrounding
 `:width' block.  Otherwise adjusts text scale."
   (let ((sign (if (eq resize-func 'image-increase-size) '+ '-)))
     (cond
-     ((or (org-image-paste--at-attr-line-p) (image-at-point-p))
+     ((or (org-image-paste--at-attr-line-p)
+          (image-at-point-p)
+          (org-image-paste--at-image-link-p))
       (org-image-paste--resize-attr sign))
      (t
       (call-interactively
