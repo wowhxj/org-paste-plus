@@ -227,23 +227,33 @@ MODE is `on' to show, `off' to hide, or nil to toggle."
 ;;;; Pasting
 
 ;;;###autoload
-(defun org-paste-plus-from-clipboard (width)
+(defun org-paste-plus-from-clipboard (width &optional src)
   "Paste a PNG from the clipboard into the buffer's asset folder.
 
 Creates `<basename>.assets/' (next to the visited file) if necessary,
 saves a uniquely timestamped PNG into it, and inserts the matching
 `#+DOWNLOADED', `#+CAPTION', `#+ATTR_ORG', `#+ATTR_LATEX',
 `#+ATTR_HTML' lines plus a `file:' link.  WIDTH is the integer pixel
-width used for the ATTR_ORG / ATTR_HTML lines."
+width used for the ATTR_ORG / ATTR_HTML lines.
+
+SRC, when non-nil, is an existing image file (e.g. a PNG copied in the
+file manager) to copy in, preserving its extension, instead of reading
+raw image data from the clipboard."
   (interactive
    (list (read-number "Image width: " org-paste-plus-default-width)))
   (let* ((folder (org-paste-plus--asset-dir))
-         (filename (format org-paste-plus-file-name-format
-                           (format-time-string org-paste-plus-time-format)))
+         (filename (if src
+                       (format "img_%s.%s"
+                               (format-time-string org-paste-plus-time-format)
+                               (or (file-name-extension src) "png"))
+                     (format org-paste-plus-file-name-format
+                             (format-time-string org-paste-plus-time-format))))
          (relative (concat folder filename)))
     (unless (file-exists-p folder)
       (make-directory folder t))
-    (shell-command (org-paste-plus--clipboard-command relative))
+    (if src
+        (copy-file src relative t)
+      (shell-command (org-paste-plus--clipboard-command relative)))
     (unless (and (file-exists-p relative)
                  (> (or (file-attribute-size (file-attributes relative)) 0) 0))
       (when (file-exists-p relative) (delete-file relative))
@@ -300,15 +310,19 @@ source path; otherwise it is read from the clipboard."
 
 ;;;###autoload
 (defun org-paste-plus-dwim ()
-  "Paste from the clipboard: a file if present, otherwise an image.
+  "Paste from the clipboard: a non-image file if present, otherwise an image.
 Probes the clipboard for a file reference first (the case when a file
-manager copied a file); falls back to `org-paste-plus-from-clipboard'
-for raw image data."
+manager copied a file); an image file is treated as an image paste so
+the width prompt and `#+ATTR_*' block are produced.  Falls back to
+`org-paste-plus-from-clipboard' for raw image data."
   (interactive)
   (let ((file (org-paste-plus--clipboard-file-path)))
-    (if file
-        (org-paste-plus-file-from-clipboard file)
-      (call-interactively #'org-paste-plus-from-clipboard))))
+    (cond
+     ((and file (string-match-p (image-file-name-regexp) file))
+      (org-paste-plus-from-clipboard
+       (read-number "Image width: " org-paste-plus-default-width) file))
+     (file (org-paste-plus-file-from-clipboard file))
+     (t (call-interactively #'org-paste-plus-from-clipboard)))))
 
 ;;;; Deletion
 
