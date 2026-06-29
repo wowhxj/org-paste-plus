@@ -1,4 +1,4 @@
-;;; org-paste-plus.el --- Paste and resize images in Org mode  -*- lexical-binding: t; -*-
+;;; org-paste-plus.el --- Paste images and files, and resize images, in Org mode  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Randolph
 
@@ -13,20 +13,25 @@
 
 ;;; Commentary:
 
-;; This package makes it easy to paste images from the system clipboard
-;; into Org buffers and to adjust how those inline images are displayed.
+;; This package makes it easy to paste images and arbitrary files from
+;; the system clipboard into Org buffers and to adjust how inline images
+;; are displayed.
 ;;
 ;; Pasting:
-;;   `org-paste-plus-from-clipboard' grabs the current clipboard image,
-;;   writes it to a `<basename>.assets/' folder next to the Org file, and
-;;   inserts a `#+DOWNLOADED' / `#+CAPTION' / `#+ATTR_ORG' /
-;;   `#+ATTR_LATEX' / `#+ATTR_HTML' block plus a `file:' link.
+;;   `org-paste-plus-dwim' (bound to `s-V') probes the clipboard: when a
+;;   file manager has copied a file (e.g. a PDF) it copies that file into
+;;   a `<basename>.assets/' folder next to the Org file and inserts a
+;;   plain `file:' link; otherwise it grabs the clipboard image, writes a
+;;   timestamped PNG into the same folder, and inserts a `#+DOWNLOADED' /
+;;   `#+CAPTION' / `#+ATTR_ORG' / `#+ATTR_LATEX' / `#+ATTR_HTML' block
+;;   plus a `file:' link.
 ;;
-;;   The clipboard tool is selected automatically from `system-type':
-;;     - macOS:      `pngpaste'
-;;     - GNU/Linux:  `xclip -selection clipboard -t image/png -o'
-;;     - Windows:    PowerShell `(Get-Clipboard -Format Image).Save'
-;;   Override with `org-paste-plus-clipboard-command' if needed.
+;;   The clipboard tools are selected automatically from `system-type':
+;;     - macOS:      `pngpaste' / `osascript' (file URL)
+;;     - GNU/Linux:  `xclip' (image/png or text/uri-list)
+;;     - Windows:    PowerShell (Get-Clipboard Image or FileDropList)
+;;   Override with `org-paste-plus-clipboard-command' or
+;;   `org-paste-plus-clipboard-file-command' if needed.
 ;;
 ;; Resizing:
 ;;   When point is on an `#+ATTR_*' / `#+CAPTION' line, `+' / `-' bump
@@ -56,6 +61,7 @@
 (require 'image)
 (require 'org)
 (require 'org-element)
+(require 'url-util)
 
 (defgroup org-paste-plus nil
   "Paste images from the clipboard and resize them in Org mode."
@@ -103,6 +109,15 @@ based on `system-type'."
   :type '(choice (const :tag "Auto-detect" nil)
                  (string :tag "Command template")))
 
+(defcustom org-paste-plus-clipboard-file-command nil
+  "Shell command that prints the path of a file copied to the clipboard.
+The command must write one absolute path (macOS/Windows) or a
+`file://' URI (Linux `text/uri-list') to stdout, and exit silently
+when no file is on the clipboard.  When nil, a sensible default is
+chosen based on `system-type'."
+  :type '(choice (const :tag "Auto-detect" nil)
+                 (string :tag "Command")))
+
 ;;;; Internal helpers
 
 (defun org-paste-plus--clipboard-command (file)
@@ -123,6 +138,36 @@ based on `system-type'."
       (user-error
        "No clipboard command for `system-type' %s; set `org-paste-plus-clipboard-command'"
        system-type)))))
+
+(defun org-paste-plus--clipboard-file-command ()
+  "Return the shell command that prints the clipboard file path, or nil."
+  (cond
+   (org-paste-plus-clipboard-file-command)
+   ((eq system-type 'darwin)
+    "osascript -e 'POSIX path of (the clipboard as «class furl»)' 2>/dev/null")
+   ((eq system-type 'gnu/linux)
+    "xclip -selection clipboard -t text/uri-list -o 2>/dev/null")
+   ((memq system-type '(windows-nt cygwin ms-dos))
+    "powershell -NoProfile -Command \"$f = Get-Clipboard -Format FileDropList; if ($f) { $f[0].FullName }\"")
+   (t nil)))
+
+(defun org-paste-plus--clipboard-file-path ()
+  "Return the absolute path of a file on the clipboard, or nil.
+Reads a file reference (not image data) put on the clipboard by the
+system file manager.  Returns nil when no such file is present."
+  (let ((cmd (org-paste-plus--clipboard-file-command)))
+    (when cmd
+      (let ((path (car (split-string
+                        (string-trim (shell-command-to-string cmd))
+                        "[\r\n]+" t))))
+        (when (and path (string-prefix-p "file://" path))
+          (setq path (url-unhex-string
+                      (substring path (length "file://")))))
+        (when (and path
+                   (not (string-empty-p path))
+                   (file-exists-p path)
+                   (not (file-directory-p path)))
+          path)))))
 
 (defun org-paste-plus--asset-dir ()
   "Return the asset directory (relative path) for the current buffer."
@@ -218,6 +263,52 @@ width used for the ATTR_ORG / ATTR_HTML lines."
       org-paste-plus-html-class
       relative))
     (org-paste-plus-display-subtree-images 'on)))
+
+(defun org-paste-plus--unique-dest (folder name)
+  "Return a destination path for NAME inside FOLDER, avoiding collisions.
+Keeps NAME as-is when free; otherwise inserts a timestamp before the
+extension."
+  (let ((dest (concat folder name)))
+    (if (file-exists-p dest)
+        (let ((base (file-name-base name))
+              (ext  (file-name-extension name)))
+          (concat folder base "_"
+                  (format-time-string org-paste-plus-time-format)
+                  (if ext (concat "." ext) "")))
+      dest)))
+
+;;;###autoload
+(defun org-paste-plus-file-from-clipboard (&optional src)
+  "Copy a file from the clipboard into the buffer's asset folder.
+
+When the system file manager has copied a file (e.g. a PDF), copy it
+into `<basename>.assets/' (next to the visited file), preserving its
+name, and insert a plain `file:' link to it.  SRC, when given, is the
+source path; otherwise it is read from the clipboard."
+  (interactive)
+  (let ((src (or src (org-paste-plus--clipboard-file-path))))
+    (unless src
+      (user-error "No file found on the clipboard"))
+    (let* ((folder (org-paste-plus--asset-dir))
+           (relative (org-paste-plus--unique-dest
+                      folder (file-name-nondirectory src))))
+      (unless (file-exists-p folder)
+        (make-directory folder t))
+      (copy-file src relative)
+      (insert (format "[[file:%s][%s]]"
+                      relative (file-name-nondirectory relative))))))
+
+;;;###autoload
+(defun org-paste-plus-dwim ()
+  "Paste from the clipboard: a file if present, otherwise an image.
+Probes the clipboard for a file reference first (the case when a file
+manager copied a file); falls back to `org-paste-plus-from-clipboard'
+for raw image data."
+  (interactive)
+  (let ((file (org-paste-plus--clipboard-file-path)))
+    (if file
+        (org-paste-plus-file-from-clipboard file)
+      (call-interactively #'org-paste-plus-from-clipboard))))
 
 ;;;; Deletion
 
@@ -373,7 +464,7 @@ When on an ATTR/CAPTION line or inline image, updates the surrounding
 
 (defvar org-paste-plus-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "s-V")   #'org-paste-plus-from-clipboard)
+    (define-key map (kbd "s-V")   #'org-paste-plus-dwim)
     (define-key map (kbd "C-c b") #'org-paste-plus-delete-link-and-file)
     (define-key map (kbd "C-+")   #'org-paste-plus-increase)
     (define-key map (kbd "C--")   #'org-paste-plus-decrease)

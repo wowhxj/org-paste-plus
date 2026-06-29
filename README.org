@@ -1,29 +1,35 @@
 #+TITLE: org-paste-plus
 #+OPTIONS: toc:nil num:nil
 
-在 Emacs Org 模式中从剪贴板粘贴图片，并就地调整显示尺寸。
+在 Emacs Org 模式中从剪贴板粘贴图片或文件，并就地调整图片显示尺寸。
 
 * 功能
 
-- 一键把剪贴板里的截图保存到 =<文件名>.assets/= 目录，并自动插入
-  =#+DOWNLOADED= / =#+CAPTION= / =#+ATTR_ORG= / =#+ATTR_LATEX= / =#+ATTR_HTML=
-  以及 =file:= 链接。
-- 跨平台剪贴板支持：macOS（=pngpaste=）、Linux（=xclip=）、Windows（PowerShell）。
+- 一键粘贴（=s-V=）智能识别剪贴板内容：
+  - 若文件管理器复制了一个文件（如 PDF），把它复制到 =<文件名>.assets/= 目录，
+    保留原文件名（重名时追加时间戳），并插入纯 =file:= 链接。
+  - 否则把剪贴板里的截图保存为时间戳 PNG，并自动插入
+    =#+DOWNLOADED= / =#+CAPTION= / =#+ATTR_ORG= / =#+ATTR_LATEX= / =#+ATTR_HTML=
+    以及 =file:= 链接。
+- 跨平台剪贴板支持：
+  - 图片：macOS（=pngpaste=）、Linux（=xclip=）、Windows（PowerShell）。
+  - 文件：macOS（=osascript=）、Linux（=xclip text/uri-list=）、Windows（=FileDropList=）。
 - 在 =#+ATTR_*= 行上按 ~+~ / ~-~ 增减所有 =:width N= 值，并刷新当前 subtree 内联图片。
 - 在内联图片上按 ~+~ / ~-~ 直接调用 =image-increase-size= / =image-decrease-size=。
 - 既不在属性行也不在图片上时，按键退化为字符自插入；~C-+~ / ~C--~ 退化为
   =text-scale-increase= / =text-scale-decrease=。
-- 在链接上按 ~C-c b~ 删除链接所指向的本地文件，并清理周围的 =#+ATTR_*= 行（仅 PNG）。
+- 在链接上按 ~C-c b~ 删除链接所指向的本地文件，并清理周围的 =#+ATTR_*= 行。
 
 * 依赖
 
-| 平台    | 工具                                         | 安装                       |
-|---------+----------------------------------------------+----------------------------|
-| macOS   | =pngpaste=                                   | =brew install pngpaste=    |
-| Linux   | =xclip=                                      | =apt install xclip= 等价命令 |
-| Windows | PowerShell（系统自带）                       | -                          |
+| 平台    | 图片工具              | 文件工具          | 安装                       |
+|---------+-----------------------+-------------------+----------------------------|
+| macOS   | =pngpaste=            | =osascript=（自带） | =brew install pngpaste=    |
+| Linux   | =xclip=               | =xclip=           | =apt install xclip= 等价命令 |
+| Windows | PowerShell（自带）    | PowerShell（自带） | -                          |
 
-也可以通过 =org-paste-plus-clipboard-command= 自行覆盖命令模板。
+也可以通过 =org-paste-plus-clipboard-command= / =org-paste-plus-clipboard-file-command=
+自行覆盖命令。
 
 * 安装
 
@@ -47,19 +53,24 @@
 
 所有按键都定义在 =org-paste-plus-mode-map= 中，可自由 rebind。
 
-| 按键    | 命令                                            | 行为                             |
-|---------+-------------------------------------------------+----------------------------------|
-| ~s-V~   | =org-paste-plus-from-clipboard=                | 从剪贴板粘贴图片                 |
-| ~C-c b~ | =org-paste-plus-delete-link-and-file=          | 删除链接和本地文件               |
-| ~C-+~   | =org-paste-plus-increase=                      | 放大图片 / 属性宽度 / 文本缩放   |
-| ~C--~   | =org-paste-plus-decrease=                      | 缩小图片 / 属性宽度 / 文本缩放   |
-| ~+~     | =org-paste-plus-image-increase-or-self-insert= | 图片上放大，否则插入 =+=         |
-| ~-~     | =org-paste-plus-image-decrease-or-self-insert= | 图片上缩小，否则插入 =-=         |
+| 按键    | 命令                                           | 行为                             |
+|---------+------------------------------------------------+----------------------------------|
+| ~s-V~   | =org-paste-plus-dwim=                           | 智能粘贴：文件优先，否则粘贴图片 |
+| ~C-c b~ | =org-paste-plus-delete-link-and-file=           | 删除链接和本地文件               |
+| ~C-+~   | =org-paste-plus-increase=                       | 放大图片 / 属性宽度 / 文本缩放   |
+| ~C--~   | =org-paste-plus-decrease=                       | 缩小图片 / 属性宽度 / 文本缩放   |
+| ~+~     | =org-paste-plus-image-increase-or-self-insert=  | 图片上放大，否则插入 =+=         |
+| ~-~     | =org-paste-plus-image-decrease-or-self-insert=  | 图片上缩小，否则插入 =-=         |
+
+另有 =org-paste-plus-from-clipboard=（仅图片）和
+=org-paste-plus-file-from-clipboard=（仅文件）两个命令，可按需单独绑定。
 
 * 工作流示例
 
+** 粘贴图片
+
 1. 截图后，光标置于 Org 文件中合适位置。
-2. 按 ~s-V~，输入宽度（默认 800px）。
+2. 按 ~s-V~（剪贴板为图像时会提示输入宽度，默认 800px）。
 3. 插入的内容大致如下：
 
    #+begin_example
@@ -75,23 +86,39 @@
    每按一次步进 =org-paste-plus-resize-step=（默认 50px），三个 ATTR
    行的 =:width= 会一起更新，subtree 内联图片立即刷新。
 
-5. 不需要某张图片时，把光标移到 =[[file:...]]= 链接上，按 ~C-c b~
-   会确认后删除文件，并清掉相关的 =#+ATTR_*= 行。
+** 粘贴文件
+
+1. 在文件管理器（如 Finder）中复制一个文件（如 =report.pdf=）。
+2. 光标置于 Org 文件中合适位置，按 ~s-V~。
+3. 文件被复制到 =<文件名>.assets/= 目录并插入链接：
+
+   #+begin_example
+   [[file:my-notes.assets/report.pdf][report.pdf]]
+   #+end_example
+
+   若 assets 目录中已存在同名文件，新文件名会追加时间戳，例如
+   =report_20260505_193000.pdf=。
+
+** 删除
+
+把光标移到 =[[file:...]]= 链接上，按 ~C-c b~ 会确认后删除文件，
+并清掉相关的 =#+ATTR_*= 行。
 
 * 自定义项
 
 通过 =M-x customize-group RET org-paste-plus RET= 查看全部，常用的有：
 
-| 变量                                  | 默认值                  | 说明                                      |
-|---------------------------------------+-------------------------+-------------------------------------------|
-| =org-paste-plus-default-width=       | =800=                   | 粘贴时的默认宽度（px）                    |
-| =org-paste-plus-resize-step=         | =50=                    | =:width= 调整步长（px）                   |
-| =org-paste-plus-latex-reference-width= | =800.0=               | 计算 LaTeX =\linewidth= 比例的参考宽度    |
-| =org-paste-plus-folder-format=       | ="%s.assets/"=          | 资源目录命名模板                          |
-| =org-paste-plus-file-name-format=    | ="img_%s.png"=          | 文件名模板                                |
-| =org-paste-plus-time-format=         | ="%Y%m%d_%H%M%S"=       | 时间戳格式                                |
-| =org-paste-plus-html-class=          | ="zoomImage"=           | HTML class                                |
-| =org-paste-plus-clipboard-command=   | =nil=（按平台自动选择） | 自定义剪贴板命令模板，=%s= 为目标文件路径 |
+| 变量                                     | 默认值                  | 说明                                      |
+|------------------------------------------+-------------------------+-------------------------------------------|
+| =org-paste-plus-default-width=           | =800=                   | 粘贴图片时的默认宽度（px）                |
+| =org-paste-plus-resize-step=             | =50=                    | =:width= 调整步长（px）                   |
+| =org-paste-plus-latex-reference-width=   | =800.0=                 | 计算 LaTeX =\linewidth= 比例的参考宽度    |
+| =org-paste-plus-folder-format=           | ="%s.assets/"=          | 资源目录命名模板                          |
+| =org-paste-plus-file-name-format=        | ="img_%s.png"=          | 图片文件名模板                            |
+| =org-paste-plus-time-format=             | ="%Y%m%d_%H%M%S"=       | 时间戳格式                                |
+| =org-paste-plus-html-class=              | ="zoomImage"=           | HTML class                                |
+| =org-paste-plus-clipboard-command=       | =nil=（按平台自动选择） | 自定义读取剪贴板图片的命令模板            |
+| =org-paste-plus-clipboard-file-command=  | =nil=（按平台自动选择） | 自定义读取剪贴板文件路径的命令            |
 
 * 致谢
 
