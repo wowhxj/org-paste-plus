@@ -1,4 +1,4 @@
-;;; org-image-paste.el --- Paste and resize images in Org mode  -*- lexical-binding: t; -*-
+;;; org-paste-plus.el --- Paste and resize images in Org mode  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Randolph
 
@@ -7,7 +7,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: multimedia, org, convenience
-;; URL: https://github.com/randolph/org-image-paste
+;; URL: https://github.com/randolph/org-paste-plus
 
 ;; This file is not part of GNU Emacs.
 
@@ -17,7 +17,7 @@
 ;; into Org buffers and to adjust how those inline images are displayed.
 ;;
 ;; Pasting:
-;;   `org-image-paste-from-clipboard' grabs the current clipboard image,
+;;   `org-paste-plus-from-clipboard' grabs the current clipboard image,
 ;;   writes it to a `<basename>.assets/' folder next to the Org file, and
 ;;   inserts a `#+DOWNLOADED' / `#+CAPTION' / `#+ATTR_ORG' /
 ;;   `#+ATTR_LATEX' / `#+ATTR_HTML' block plus a `file:' link.
@@ -26,11 +26,11 @@
 ;;     - macOS:      `pngpaste'
 ;;     - GNU/Linux:  `xclip -selection clipboard -t image/png -o'
 ;;     - Windows:    PowerShell `(Get-Clipboard -Format Image).Save'
-;;   Override with `org-image-paste-clipboard-command' if needed.
+;;   Override with `org-paste-plus-clipboard-command' if needed.
 ;;
 ;; Resizing:
 ;;   When point is on an `#+ATTR_*' / `#+CAPTION' line, `+' / `-' bump
-;;   every `:width N' value on that block by `org-image-paste-resize-step'
+;;   every `:width N' value on that block by `org-paste-plus-resize-step'
 ;;   and refresh the inline display of the current subtree.
 ;;   When point is on an inline image, `+' / `-' call
 ;;   `image-increase-size' / `image-decrease-size'.
@@ -39,15 +39,15 @@
 ;;
 ;; Quick start:
 ;;
-;;   (require 'org-image-paste)
-;;   (add-hook 'org-mode-hook #'org-image-paste-mode)
+;;   (require 'org-paste-plus)
+;;   (add-hook 'org-mode-hook #'org-paste-plus-mode)
 ;;
 ;; Or with `use-package':
 ;;
-;;   (use-package org-image-paste
-;;     :hook (org-mode . org-image-paste-mode))
+;;   (use-package org-paste-plus
+;;     :hook (org-mode . org-paste-plus-mode))
 ;;
-;; All bindings live in `org-image-paste-mode-map' so you are free to
+;; All bindings live in `org-paste-plus-mode-map' so you are free to
 ;; rebind them.
 
 ;;; Code:
@@ -57,45 +57,45 @@
 (require 'org)
 (require 'org-element)
 
-(defgroup org-image-paste nil
+(defgroup org-paste-plus nil
   "Paste images from the clipboard and resize them in Org mode."
   :group 'org
-  :prefix "org-image-paste-")
+  :prefix "org-paste-plus-")
 
 ;;;; Customization
 
-(defcustom org-image-paste-default-width 800
+(defcustom org-paste-plus-default-width 800
   "Default image width (pixels) used when pasting from the clipboard."
   :type 'integer)
 
-(defcustom org-image-paste-resize-step 50
+(defcustom org-paste-plus-resize-step 50
   "Pixel step for `:width' adjustments via the keymap."
   :type 'integer)
 
-(defcustom org-image-paste-latex-reference-width 800.0
+(defcustom org-paste-plus-latex-reference-width 800.0
   "Reference width used to derive `:width' for `#+ATTR_LATEX'.
 The latex width is computed as PASTE-WIDTH / this value, capped at 1.0."
   :type 'number)
 
-(defcustom org-image-paste-folder-format "%s.assets/"
+(defcustom org-paste-plus-folder-format "%s.assets/"
   "Format string for the asset folder name.
 %s is replaced with the buffer file's base name."
   :type 'string)
 
-(defcustom org-image-paste-file-name-format "img_%s.png"
+(defcustom org-paste-plus-file-name-format "img_%s.png"
   "Format string for the saved image's file name.
 %s is replaced with a timestamp from `format-time-string'."
   :type 'string)
 
-(defcustom org-image-paste-time-format "%Y%m%d_%H%M%S"
+(defcustom org-paste-plus-time-format "%Y%m%d_%H%M%S"
   "Time format used to make pasted file names unique."
   :type 'string)
 
-(defcustom org-image-paste-html-class "zoomImage"
+(defcustom org-paste-plus-html-class "zoomImage"
   "CSS class added to the inserted `#+ATTR_HTML' block."
   :type 'string)
 
-(defcustom org-image-paste-clipboard-command nil
+(defcustom org-paste-plus-clipboard-command nil
   "Shell command template for reading a PNG from the clipboard.
 The literal `%s' placeholder is replaced with the destination file
 path (already shell-quoted).  When nil, a sensible default is chosen
@@ -105,12 +105,12 @@ based on `system-type'."
 
 ;;;; Internal helpers
 
-(defun org-image-paste--clipboard-command (file)
+(defun org-paste-plus--clipboard-command (file)
   "Return the shell command to write clipboard PNG into FILE."
   (let ((quoted (shell-quote-argument file)))
     (cond
-     (org-image-paste-clipboard-command
-      (format org-image-paste-clipboard-command quoted))
+     (org-paste-plus-clipboard-command
+      (format org-paste-plus-clipboard-command quoted))
      ((eq system-type 'darwin)
       (format "pngpaste %s" quoted))
      ((eq system-type 'gnu/linux)
@@ -121,28 +121,28 @@ based on `system-type'."
        file))
      (t
       (user-error
-       "No clipboard command for `system-type' %s; set `org-image-paste-clipboard-command'"
+       "No clipboard command for `system-type' %s; set `org-paste-plus-clipboard-command'"
        system-type)))))
 
-(defun org-image-paste--asset-dir ()
+(defun org-paste-plus--asset-dir ()
   "Return the asset directory (relative path) for the current buffer."
   (unless buffer-file-name
     (user-error "Buffer is not visiting a file; save it first"))
-  (format org-image-paste-folder-format
+  (format org-paste-plus-folder-format
           (file-name-base buffer-file-name)))
 
-(defun org-image-paste--latex-width (width)
+(defun org-paste-plus--latex-width (width)
   "Compute the latex `\\linewidth' multiplier for an integer WIDTH."
-  (let ((ratio (/ (float width) org-image-paste-latex-reference-width)))
+  (let ((ratio (/ (float width) org-paste-plus-latex-reference-width)))
     (if (>= ratio 1.0) "1.0" (number-to-string ratio))))
 
-(defun org-image-paste--at-attr-line-p ()
+(defun org-paste-plus--at-attr-line-p ()
   "Non-nil if the current line is an Org `#+ATTR_*' or `#+CAPTION' line."
   (save-excursion
     (beginning-of-line)
     (looking-at-p "^[ \t]*#\\+\\(?:ATTR_[A-Z]+\\|CAPTION\\):")))
 
-(defun org-image-paste--at-image-link-p ()
+(defun org-paste-plus--at-image-link-p ()
   "Non-nil if point is on an Org link pointing to an image file.
 Unlike `image-at-point-p', this works even when an `appear'-style
 feature has deleted the inline image overlay (which removes the image
@@ -155,7 +155,7 @@ feature has deleted the inline image overlay (which removes the image
 
 ;;;; Display refresh
 
-(defun org-image-paste-display-subtree-images (&optional mode)
+(defun org-paste-plus-display-subtree-images (&optional mode)
   "Refresh inline image display for the current subtree.
 MODE is `on' to show, `off' to hide, or nil to toggle."
   (interactive "P")
@@ -182,7 +182,7 @@ MODE is `on' to show, `off' to hide, or nil to toggle."
 ;;;; Pasting
 
 ;;;###autoload
-(defun org-image-paste-from-clipboard (width)
+(defun org-paste-plus-from-clipboard (width)
   "Paste a PNG from the clipboard into the buffer's asset folder.
 
 Creates `<basename>.assets/' (next to the visited file) if necessary,
@@ -191,14 +191,14 @@ saves a uniquely timestamped PNG into it, and inserts the matching
 `#+ATTR_HTML' lines plus a `file:' link.  WIDTH is the integer pixel
 width used for the ATTR_ORG / ATTR_HTML lines."
   (interactive
-   (list (read-number "Image width: " org-image-paste-default-width)))
-  (let* ((folder (org-image-paste--asset-dir))
-         (filename (format org-image-paste-file-name-format
-                           (format-time-string org-image-paste-time-format)))
+   (list (read-number "Image width: " org-paste-plus-default-width)))
+  (let* ((folder (org-paste-plus--asset-dir))
+         (filename (format org-paste-plus-file-name-format
+                           (format-time-string org-paste-plus-time-format)))
          (relative (concat folder filename)))
     (unless (file-exists-p folder)
       (make-directory folder t))
-    (shell-command (org-image-paste--clipboard-command relative))
+    (shell-command (org-paste-plus--clipboard-command relative))
     (unless (and (file-exists-p relative)
                  (> (or (file-attribute-size (file-attributes relative)) 0) 0))
       (when (file-exists-p relative) (delete-file relative))
@@ -213,16 +213,16 @@ width used for the ATTR_ORG / ATTR_HTML lines."
               "\n[[file:%s]]\n")
       (format-time-string "%Y-%m-%d %a %H:%M:%S")
       width
-      (org-image-paste--latex-width width)
+      (org-paste-plus--latex-width width)
       width
-      org-image-paste-html-class
+      org-paste-plus-html-class
       relative))
-    (org-image-paste-display-subtree-images 'on)))
+    (org-paste-plus-display-subtree-images 'on)))
 
 ;;;; Deletion
 
 ;;;###autoload
-(defun org-image-paste--link-block-bounds ()
+(defun org-paste-plus--link-block-bounds ()
   "Return (START . END) for the image block containing the link at point.
 Scans upward from the link line to collect contiguous #+DOWNLOADED:,
 #+CAPTION:, and #+ATTR_* lines.  If the resulting block is wrapped
@@ -231,7 +231,7 @@ expands the bounds to include that envelope too.
 Returns nil if point is not on a bracket link."
   (save-excursion
     (unless (org-in-regexp org-link-bracket-re 1)
-      (cl-return-from org-image-paste--link-block-bounds nil))
+      (cl-return-from org-paste-plus--link-block-bounds nil))
     (beginning-of-line)
     (let ((link-end (line-end-position))
           (start    (line-beginning-position)))
@@ -264,7 +264,7 @@ Returns nil if point is not on a bracket link."
             (setq end (min (1+ (line-end-position)) (point-max)))))
         (cons start end)))))
 
-(defun org-image-paste-delete-link-and-file ()
+(defun org-paste-plus-delete-link-and-file ()
   "Delete the file referenced by the link at point and the surrounding block.
 
 Removes the `[[file:...]]' link line together with any contiguous
@@ -286,7 +286,7 @@ preceding `#+DOWNLOADED:', `#+CAPTION:', and `#+ATTR_*' lines."
                                (if (file-exists-p path) "" " (file missing)")))
       (when (file-exists-p path)
         (delete-file path))
-      (let ((bounds (org-image-paste--link-block-bounds)))
+      (let ((bounds (org-paste-plus--link-block-bounds)))
         (if bounds
             (delete-region (car bounds) (min (cdr bounds) (point-max)))
           ;; Fallback: just delete the link text on this line.
@@ -295,7 +295,7 @@ preceding `#+DOWNLOADED:', `#+CAPTION:', and `#+ATTR_*' lines."
 
 ;;;; Resizing
 
-(defun org-image-paste--resize-attr (sign)
+(defun org-paste-plus--resize-attr (sign)
   "Adjust `:width N' values on the surrounding ATTR block by SIGN.
 SIGN is `+' to grow or `-' to shrink.  Walks back up to three lines
 to cover the typical ATTR_ORG / ATTR_LATEX / ATTR_HTML triple.
@@ -312,8 +312,8 @@ ATTR_LATEX \\\\linewidth fraction is recomputed from the new pixel width."
               "^[ \t]*#\\+ATTR_\\(?:ORG\\|HTML\\):.*:width \\([0-9]+\\)" reg-end t)
         (let* ((width (string-to-number (match-string 1)))
                (new   (if (eq sign '+)
-                          (+ width org-image-paste-resize-step)
-                        (- width org-image-paste-resize-step))))
+                          (+ width org-paste-plus-resize-step)
+                        (- width org-paste-plus-resize-step))))
           (when (> new 0)
             (setq new-pixel-width new)
             (replace-match (number-to-string new) t t nil 1))))
@@ -323,38 +323,38 @@ ATTR_LATEX \\\\linewidth fraction is recomputed from the new pixel width."
         (when (re-search-forward
                "^[ \t]*#\\+ATTR_LATEX:.*:width \\([0-9.]+\\)\\\\linewidth" reg-end t)
           (replace-match
-           (org-image-paste--latex-width new-pixel-width) t t nil 1)))
+           (org-paste-plus--latex-width new-pixel-width) t t nil 1)))
       (set-marker reg-end nil)))
-  (org-image-paste-display-subtree-images 'on))
+  (org-paste-plus-display-subtree-images 'on))
 
-(defun org-image-paste--resize (resize-func)
+(defun org-paste-plus--resize (resize-func)
   "Resize images or adjust text scale based on context.
 When on an ATTR/CAPTION line or inline image, updates the surrounding
 `:width' block.  Otherwise adjusts text scale."
   (let ((sign (if (eq resize-func 'image-increase-size) '+ '-)))
     (cond
-     ((or (org-image-paste--at-attr-line-p)
+     ((or (org-paste-plus--at-attr-line-p)
           (image-at-point-p)
-          (org-image-paste--at-image-link-p))
-      (org-image-paste--resize-attr sign))
+          (org-paste-plus--at-image-link-p))
+      (org-paste-plus--resize-attr sign))
      (t
       (call-interactively
        (if (eq sign '+) #'text-scale-increase #'text-scale-decrease))))))
 
 ;;;###autoload
-(defun org-image-paste-increase ()
+(defun org-paste-plus-increase ()
   "Grow the image, `:width' attr, or text scale at point."
   (interactive)
-  (org-image-paste--resize 'image-increase-size))
+  (org-paste-plus--resize 'image-increase-size))
 
 ;;;###autoload
-(defun org-image-paste-decrease ()
+(defun org-paste-plus-decrease ()
   "Shrink the image, `:width' attr, or text scale at point."
   (interactive)
-  (org-image-paste--resize 'image-decrease-size))
+  (org-paste-plus--resize 'image-decrease-size))
 
 ;;;###autoload
-(defun org-image-paste-image-increase-or-self-insert ()
+(defun org-paste-plus-image-increase-or-self-insert ()
   "If point is on an image, call `image-increase-size'; else self-insert."
   (interactive)
   (if (image-at-point-p)
@@ -362,7 +362,7 @@ When on an ATTR/CAPTION line or inline image, updates the surrounding
     (self-insert-command 1)))
 
 ;;;###autoload
-(defun org-image-paste-image-decrease-or-self-insert ()
+(defun org-paste-plus-image-decrease-or-self-insert ()
   "If point is on an image, call `image-decrease-size'; else self-insert."
   (interactive)
   (if (image-at-point-p)
@@ -371,24 +371,24 @@ When on an ATTR/CAPTION line or inline image, updates the surrounding
 
 ;;;; Minor mode
 
-(defvar org-image-paste-mode-map
+(defvar org-paste-plus-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "s-V")   #'org-image-paste-from-clipboard)
-    (define-key map (kbd "C-c b") #'org-image-paste-delete-link-and-file)
-    (define-key map (kbd "C-+")   #'org-image-paste-increase)
-    (define-key map (kbd "C--")   #'org-image-paste-decrease)
-    (define-key map (kbd "+")     #'org-image-paste-image-increase-or-self-insert)
-    (define-key map (kbd "-")     #'org-image-paste-image-decrease-or-self-insert)
+    (define-key map (kbd "s-V")   #'org-paste-plus-from-clipboard)
+    (define-key map (kbd "C-c b") #'org-paste-plus-delete-link-and-file)
+    (define-key map (kbd "C-+")   #'org-paste-plus-increase)
+    (define-key map (kbd "C--")   #'org-paste-plus-decrease)
+    (define-key map (kbd "+")     #'org-paste-plus-image-increase-or-self-insert)
+    (define-key map (kbd "-")     #'org-paste-plus-image-decrease-or-self-insert)
     map)
-  "Keymap for `org-image-paste-mode'.")
+  "Keymap for `org-paste-plus-mode'.")
 
 ;;;###autoload
-(define-minor-mode org-image-paste-mode
-  "Buffer-local minor mode that enables `org-image-paste' bindings.
+(define-minor-mode org-paste-plus-mode
+  "Buffer-local minor mode that enables `org-paste-plus' bindings.
 
-\\{org-image-paste-mode-map}"
-  :lighter " ImgPaste"
-  :keymap org-image-paste-mode-map)
+\\{org-paste-plus-mode-map}"
+  :lighter " PastePlus"
+  :keymap org-paste-plus-mode-map)
 
-(provide 'org-image-paste)
-;;; org-image-paste.el ends here
+(provide 'org-paste-plus)
+;;; org-paste-plus.el ends here
