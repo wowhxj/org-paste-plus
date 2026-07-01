@@ -391,6 +391,12 @@ preceding `#+DOWNLOADED:', `#+CAPTION:', and `#+ATTR_*' lines."
                                (if (file-exists-p path) "" " (file missing)")))
       (when (file-exists-p path)
         (delete-file path))
+      ;; chatu-excalidraw exports SVGs from a same-named .excalidraw
+      ;; source file; delete that source alongside the SVG.
+      (when (string= (file-name-extension path) "svg")
+        (let ((excalidraw-path (concat (file-name-sans-extension path) ".excalidraw")))
+          (when (file-exists-p excalidraw-path)
+            (delete-file excalidraw-path))))
       (let ((bounds (org-paste-plus--link-block-bounds)))
         (if bounds
             (delete-region (car bounds) (min (cdr bounds) (point-max)))
